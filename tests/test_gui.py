@@ -79,3 +79,17 @@ def test_missing_step_file_falls_back_to_profile(win, monkeypatch):
     d["step_path"] = "Z:/no/such/mirror.step"
     w.apply_params(d)
     assert shown and w.p.mirror.step_path == ""
+
+
+def test_load_step_mirror(win):
+    from rcjmirror.field import FIELD_STEP
+
+    w = win
+    step = FIELD_STEP.parent / "Gyperbolic_mirror.STEP"
+    d = w.params_dict()
+    d["step_path"] = str(step)
+    w.apply_params(d)
+    w.refresh()
+    assert w.p.mirror.step_path == str(step)
+    assert w.sim.mirror_info["size"][0] == pytest.approx(54.0, abs=0.1)
+    assert "Gyperbolic_mirror" in w.mirror_lbl.text()

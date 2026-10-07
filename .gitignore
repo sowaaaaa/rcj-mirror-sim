@@ -1,7 +1,5 @@
 .venv/
 __pycache__/
 *.pyc
-# floor texture cache, rebuilt on first start
-rcjmirror/_floor_tex*.npy
 error.log
 *.png

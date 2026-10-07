@@ -41,9 +41,9 @@ def _corner_normals(mesh, angle_deg=30.0):
 
 class Simulator:
     def __init__(self):
-        self.floor = F.FloorTexture()
-        mb = F.build_field_mesh()
-        self.static_mb = mb
+        self.field = F.load_field()
+        self.field_occluders = F.occluders(*self.field)
+        self.field_top, self.field_top_extent = F.top_view(*self.field)
         self._mirror_key = None
         self._mirror_placed_key = None
         self.mirror_mesh = None
@@ -71,41 +71,29 @@ class Simulator:
         self._mirror_placed_key = plane_h
 
     # -- scene ----------------------------------------------------------
-    def _scene(self, p, include_dynamic=True, field=True, ball=True):
+    def _scene(self, p, field, ball=True):
+        """field = (mesh, colours) of the field part to include, or None."""
         mb = F.MeshBuilder()
-        if field:
-            mb.v, mb.f, mb.c, mb.n = list(self.static_mb.v), list(self.static_mb.f), list(self.static_mb.c), self.static_mb.n
-        if include_dynamic:
-            if ball:
-                mb.add_trimesh(F.ball_mesh(p.ball_x, p.ball_y), C.C_BALL)
-            r = p.robot
-            mb.add_trimesh(F.robot_body_mesh(r.x, r.y, r.heading_deg, r.size, r.body_height), C.C_ROBOT)
+        if field is not None:
+            mb.add(field[0].vertices, field[0].faces, field[1])
+        if ball:
+            mb.add_trimesh(F.ball_mesh(p.ball_x, p.ball_y), C.C_BALL)
+        r = p.robot
+        mb.add_trimesh(F.robot_body_mesh(r.x, r.y, r.heading_deg, r.size, r.body_height), C.C_ROBOT)
         mesh, cols = mb.build()
         return RayMeshIntersector(mesh), mesh, cols
 
     def _shade_scene(self, o, d, inter, mesh, cols, bg=C.C_BACKGROUND):
-        """Colour of the first scene hit along each ray (floor texture + meshes)."""
-        n = len(o)
+        """Colour of the first scene hit along each ray."""
         t_mesh, tri = _intersect(inter, o, d)
-        t_floor = np.full(n, np.inf)
-        dz = d[:, 2]
-        down = dz < -1e-9
-        t_floor[down] = -o[down, 2] / dz[down]
-        fp = o + d * t_floor[:, None]
-        in_field = (np.abs(fp[:, 0]) <= C.TOTAL_W / 2) & (np.abs(fp[:, 1]) <= C.TOTAL_L / 2)
-        t_floor[~in_field | ~down] = np.inf
-
-        out = np.empty((n, 3))
+        out = np.empty((len(o), 3))
         out[:] = bg
-        use_floor = np.isfinite(t_floor) & (t_floor < t_mesh)
-        use_mesh = np.isfinite(t_mesh) & ~use_floor
-        if use_floor.any():
-            out[use_floor] = self.floor.sample(fp[use_floor, 0], fp[use_floor, 1])
-        if use_mesh.any():
-            nrm = mesh.face_normals[tri[use_mesh]]
+        hit = np.isfinite(t_mesh)
+        if hit.any():
+            nrm = mesh.face_normals[tri[hit]]
             lam = np.abs(nrm @ LIGHT)
-            out[use_mesh] = cols[tri[use_mesh]] * (0.55 + 0.45 * lam)[:, None]
-        return out, np.minimum(t_floor, t_mesh), use_floor
+            out[hit] = cols[tri[hit]] * (0.55 + 0.45 * lam)[:, None]
+        return out
 
     # -- camera rays ------------------------------------------------------
     @staticmethod
@@ -151,9 +139,9 @@ class Simulator:
         W, H = width or p.camera.width, height or p.camera.height
         d_local = self.camera_rays(p.camera, W, H)
         ro, rd, hit = self._reflect(p, d_local)
-        inter, mesh, cols = self._scene(p)
+        inter, mesh, cols = self._scene(p, self.field)
         img = np.zeros((W * H, 3))
-        col, _, _ = self._shade_scene(ro, rd, inter, mesh, cols)
+        col = self._shade_scene(ro, rd, inter, mesh, cols)
         img[hit] = col * p.mirror.reflectance
         return (np.clip(img, 0, 1).reshape(H, W, 3) * 255).astype(np.uint8)
 
@@ -168,7 +156,7 @@ class Simulator:
         d_local = self.camera_rays(p.camera, W, H)
         ro, rd, hit = self._reflect(p, d_local)
         # occluders: the robot's own body always; walls/goals only when walls=True
-        inter, mesh, cols = self._scene(p, include_dynamic=True, field=walls, ball=False)
+        inter, mesh, cols = self._scene(p, self.field_occluders if walls else None, ball=False)
         n = len(ro)
         X = np.full(W * H, np.nan)
         Y = np.full(W * H, np.nan)

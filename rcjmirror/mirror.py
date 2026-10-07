@@ -9,27 +9,19 @@ import numpy as np
 import trimesh
 
 
-def load_step_mesh(path, linear_deflection=0.01, angular_deflection=0.05):
+def triangulate_faces(shape, linear_deflection, angular_deflection):
+    """Mesh a B-rep shape. Yields (face, vertices (n, 3), triangles (m, 3), 0-based) per face."""
     from OCP.BRep import BRep_Tool
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
-    from OCP.IFSelect import IFSelect_RetDone
-    from OCP.STEPControl import STEPControl_Reader
     from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopLoc import TopLoc_Location
     from OCP.TopoDS import TopoDS
 
-    reader = STEPControl_Reader()
-    if reader.ReadFile(str(path)) != IFSelect_RetDone:
-        raise ValueError(f"cannot read STEP file: {path}")
-    reader.TransferRoots()
-    shape = reader.OneShape()
     BRepMesh_IncrementalMesh(shape, linear_deflection, False, angular_deflection, True)
-
-    verts, faces, n0 = [], [], 0
+    to_face = getattr(TopoDS, "Face_s", None) or TopoDS.Face   # OCP < 8 / OCP 8
     exp = TopExp_Explorer(shape, TopAbs_FACE)
     while exp.More():
-        to_face = getattr(TopoDS, "Face_s", None) or TopoDS.Face   # OCP < 8 / OCP 8
         face = to_face(exp.Current())
         loc = TopLoc_Location()
         tri = BRep_Tool.Triangulation_s(face, loc)
@@ -40,16 +32,32 @@ def load_step_mesh(path, linear_deflection=0.01, angular_deflection=0.05):
                 p = tri.Node(i).Transformed(trsf)
                 pts.append((p.X(), p.Y(), p.Z()))
             rev = face.Orientation() == TopAbs_REVERSED
+            tris = []
             for i in range(1, tri.NbTriangles() + 1):
                 a, b, c = tri.Triangle(i).Get()
-                t = (a - 1, c - 1, b - 1) if rev else (a - 1, b - 1, c - 1)
-                faces.append([n0 + t[0], n0 + t[1], n0 + t[2]])
-            verts.extend(pts)
-            n0 += len(pts)
+                tris.append((a - 1, c - 1, b - 1) if rev else (a - 1, b - 1, c - 1))
+            yield face, np.array(pts), np.array(tris)
         exp.Next()
+
+
+def load_step_mesh(path, linear_deflection=0.01, angular_deflection=0.05):
+    from OCP.IFSelect import IFSelect_RetDone
+    from OCP.STEPControl import STEPControl_Reader
+
+    reader = STEPControl_Reader()
+    if reader.ReadFile(str(path)) != IFSelect_RetDone:
+        raise ValueError(f"cannot read STEP file: {path}")
+    reader.TransferRoots()
+    shape = reader.OneShape()
+
+    verts, faces, n0 = [], [], 0
+    for _, pts, tris in triangulate_faces(shape, linear_deflection, angular_deflection):
+        verts.append(pts)
+        faces.append(tris + n0)
+        n0 += len(pts)
     if not faces:
         raise ValueError("STEP file contains no surfaces")
-    m = trimesh.Trimesh(np.array(verts), np.array(faces), process=True)
+    m = trimesh.Trimesh(np.vstack(verts), np.vstack(faces), process=True)
     m.update_faces(m.nondegenerate_faces())          # zero-area slivers from the tessellator
     return m
 

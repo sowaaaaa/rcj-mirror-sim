@@ -16,19 +16,45 @@ def sim():
     return s
 
 
-def test_floor_texture_markings():
-    tex = F.FloorTexture()
-    carpet, line = np.array(C.C_CARPET), np.array(C.C_LINE)
-    x_line = C.PLAY_W / 2 - C.LINE_W / 2                  # middle of the side boundary line
-    got = tex.sample(np.array([200.0, x_line]), np.array([200.0, 0.0]))
-    assert got[0] == pytest.approx(carpet, abs=1e-3)
-    assert got[1] == pytest.approx(line, abs=1e-3)
+BLUE, YELLOW = (0.34, 0.43, 1.0), (1.0, 0.7, 0.0)
+GREEN, WHITE, BLACK = (0.27, 0.59, 0.28), (0.96, 0.96, 0.95), (0.1, 0.1, 0.1)
 
 
-def test_texture_cache_depends_on_field_constants(monkeypatch):
-    a = F._tex_path()
-    monkeypatch.setattr(C, "PLAY_W", C.PLAY_W + 10)
-    assert F._tex_path() != a
+def _faces_of(mesh, cols, colour):
+    return mesh.triangles_center[np.all(np.abs(cols - colour) < 0.02, axis=1)]
+
+
+def test_field_step_in_sim_frame(sim):
+    mesh, cols = sim.field
+    lo, hi = mesh.bounds
+    assert lo[:2] == pytest.approx([-930.0, -1235.0], abs=0.5)     # outer face of the 20 mm walls
+    assert hi[:2] == pytest.approx([930.0, 1235.0], abs=0.5)
+    carpet = _faces_of(mesh, cols, GREEN)
+    assert np.median(carpet[:, 2]) == pytest.approx(0.0, abs=0.5)  # carpet at z = 0
+    blue, yellow = _faces_of(mesh, cols, BLUE), _faces_of(mesh, cols, YELLOW)
+    assert len(blue) and len(yellow)
+    edge = C.PLAY_L / 2 - 20.0                                     # goal posts stand on the 20 mm line
+    assert np.all(blue[:, 1] > edge) and np.all(yellow[:, 1] < -edge)
+    assert np.all(np.abs(blue[:, 0]) <= 300.0 + 1)                 # goal 600 mm wide, centred
+
+
+def test_field_top_view_markings(sim):
+    img, (x0, _, y0, _) = sim.field_top, sim.field_top_extent
+
+    def at(x, y):
+        return img[int((y - y0) / F.TOP_RES), int((x - x0) / F.TOP_RES)]
+
+    assert at(200, 200) == pytest.approx(GREEN, abs=0.02)
+    assert at(C.PLAY_W / 2 - 10, 0) == pytest.approx(WHITE, abs=0.02)    # side boundary line
+    assert at(0, C.PLAY_L / 2 - 10) == pytest.approx(WHITE, abs=0.02)    # goal line
+    assert at(0, 0) == pytest.approx(BLACK, abs=0.02)                    # centre spot
+    assert at(-925, 0) == pytest.approx(BLACK, abs=0.02)                 # wall
+
+
+def test_occluders_exclude_floor(sim):
+    occ, _ = sim.field_occluders
+    assert len(occ.faces) < len(sim.field[0].faces)
+    assert occ.vertices[occ.faces][:, :, 2].max(axis=1).min() >= F.FLOOR_LEVEL
 
 
 def test_render_image(sim):
@@ -83,3 +109,14 @@ def test_radial_profile_is_monotonic(sim):
     assert prof is not None and len(prof["r_px"]) > 10
     assert np.all(np.diff(prof["dist"]) >= -1.0)
     assert prof["blind"] < prof["far"]
+
+
+def test_render_with_step_mirror():
+    s = Simulator()
+    s.set_mirror(str(F.FIELD_STEP.parent / "Gyperbolic_mirror.STEP"))
+    p = SimParams()
+    img = s.render(p, 160, 120)
+    green = (img[..., 1] > img[..., 0] + 20) & (img[..., 1] > img[..., 2] + 20)
+    assert green.mean() > 0.05
+    _, _, v, d = s.floor_map(p, 0.0, 160, 120)
+    assert v.any() and np.nanmax(d) > 1000.0                # sees far across the field

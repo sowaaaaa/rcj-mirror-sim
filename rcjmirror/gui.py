@@ -282,7 +282,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # -------------------------------------------------------------- mirror
     def load_step(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "STEP зеркала", "", "STEP (*.step *.stp)")
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "STEP зеркала", str(F.FIELD_STEP.parent),
+                                                        "STEP (*.step *.stp)")
         if path:
             self.p.mirror.step_path = path
             self.reload_mirror()
@@ -469,8 +470,7 @@ class MainWindow(QtWidgets.QMainWindow):
         t = self.t_map
         ax = t.axes[0, 0]
         ax.clear()
-        tex = self.sim.floor.tex
-        ax.imshow(tex, origin="lower", extent=(-C.TOTAL_W / 2, C.TOTAL_W / 2, -C.TOTAL_L / 2, C.TOTAL_L / 2))
+        ax.imshow(self.sim.field_top, origin="lower", extent=self.sim.field_top_extent)
         p = self.p
         from matplotlib.patches import Circle
         ax.add_patch(Circle((p.robot.x, p.robot.y), p.robot.size / 2, fill=False, ec="cyan", lw=2))
@@ -493,13 +493,7 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---------------------------------------------------------------- 3D
     def view_3d(self):
         p, pl = self.p, self.plotter
-        # floor with texture
-        plane = pv.Plane(center=(0, 0, 0), direction=(0, 0, 1), i_size=C.TOTAL_W, j_size=C.TOTAL_L)
-        tex = pv.Texture((np.clip(self.sim.floor.tex, 0, 1) * 255).astype(np.uint8))
-        pl.add_mesh(plane, texture=tex, name="floor", lighting=False)
-
-        mesh, cols = self.sim.static_mb.build()
-        pl.add_mesh(self._pv(mesh, cols), scalars="rgb", rgb=True, name="field")
+        pl.add_mesh(self._pv(*self.sim.field), scalars="rgb", rgb=True, name="field")
 
         r = p.robot
         body = F.robot_body_mesh(r.x, r.y, r.heading_deg, r.size, r.body_height)
