@@ -99,10 +99,7 @@ def _revolve_with_rim(r, z, rim=3.0, rim_w=6.0):
 
 
 def preset_mirror(name, radius, depth, rim=3.0, rim_w=6.0):
-    if name == "points":                      # (name, points, smooth)
-        r, z = curve_from_points(radius, depth)
-    else:
-        r, z = profile_curve(name, radius, depth)
+    r, z = profile_curve(name, radius, depth)
     return _revolve_with_rim(r, z, rim, rim_w)
 
 
@@ -237,8 +234,8 @@ def normalise_mirror(mesh, scale=1.0, flip=False, ref_plane_z=None):
 def load_mirror(step_path="", scale=1.0, flip=False, ref_plane_z=None, profile=None):
     """profile = (preset name, radius, depth) is used when no STEP path is given."""
     if not step_path and profile:
-        if profile[0] == "points":
-            raw = preset_mirror("points", [tuple(q) for q in profile[1]], profile[2])
+        if profile[0] == "points":                    # ("points", control points, smooth)
+            raw = _revolve_with_rim(*curve_from_points([tuple(q) for q in profile[1]], profile[2]))
         else:
             raw = preset_mirror(*profile)
         return raw, dict(auto_flipped=False, ref_plane_z=0.0, bounds=raw.bounds.copy(), size=raw.extents.copy())

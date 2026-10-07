@@ -45,12 +45,12 @@ ROBOT_PRESETS = {
 class CameraParams:
     """OpenMV Cam H7 Plus (OV5640, stock 2.8 mm M12 lens).
 
-    hfov_deg is a placeholder: verify against your lens; it is the only
-    lens parameter the pinhole model needs.
+    hfov_deg is the stock lens value (70.8 x 55.6 deg); it is the only lens
+    parameter the pinhole model needs. Change it for a different lens.
     """
     width: int = 320
     height: int = 240
-    hfov_deg: float = 70.0
+    hfov_deg: float = 70.8
     # lens end of the camera, measured from the field surface
     height_above_field: float = 80.0
 

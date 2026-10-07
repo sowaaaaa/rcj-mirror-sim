@@ -1,4 +1,5 @@
 """Field geometry: analytic floor texture (lines) + triangle meshes for solids."""
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -7,7 +8,14 @@ import trimesh
 from . import config as C
 
 TEX_RES = 2.0                       # mm per texture pixel
-_TEX_PATH = Path(__file__).with_name("_floor_tex.npy")
+
+
+def _tex_path():
+    """Cache file named after the inputs of build_floor_texture, so edited constants rebuild it."""
+    key = (TEX_RES, C.PLAY_W, C.PLAY_L, C.TOTAL_W, C.TOTAL_L, C.LINE_W, C.PEN_W, C.PEN_D, C.PEN_R,
+           C.CENTER_CIRCLE_D, C.SPOT_D, C.SPOT_X, C.SPOT_Y, C.C_CARPET, C.C_LINE, C.C_MARK)
+    digest = hashlib.sha1(repr(key).encode()).hexdigest()[:10]
+    return Path(__file__).with_name(f"_floor_tex_{digest}.npy")
 
 
 # --------------------------------------------------------------------------
@@ -58,10 +66,11 @@ def build_floor_texture():
 
 
 def get_floor_texture():
-    if _TEX_PATH.exists():
-        return np.load(_TEX_PATH)
+    path = _tex_path()
+    if path.exists():
+        return np.load(path)
     tex = build_floor_texture()
-    np.save(_TEX_PATH, tex)
+    np.save(path, tex)
     return tex
 
 

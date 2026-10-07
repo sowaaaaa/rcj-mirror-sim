@@ -1,5 +1,7 @@
 """Qt GUI: parameters on the left, views on the right."""
+import json
 import sys
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("QtAgg")
@@ -138,7 +140,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.res.setCurrentIndex(1)
         self.res.currentIndexChanged.connect(self.changed)
         f.addRow("Разрешение", self.res)
-        self.hfov = self._spin(f, "HFOV (проверьте для вашего объектива)", 20, 170, self.p.camera.hfov_deg, 1, suffix="°")
+        self.hfov = self._spin(f, "HFOV (стандартный объектив 70,8°)", 20, 170, self.p.camera.hfov_deg, 1, suffix="°")
         lv.addWidget(g)
 
         # ball
@@ -224,6 +226,13 @@ class MainWindow(QtWidgets.QMainWindow):
                                    | QtWidgets.QDockWidget.DockWidgetClosable)
         self.editor.setMinimumHeight(200)
         self.addDockWidget(QtCore.Qt.BottomDockWidgetArea, self.dock_prof)
+        menu = self.menuBar().addMenu("Файл")
+        act = menu.addAction("Сохранить параметры…")
+        act.setShortcut("Ctrl+S")
+        act.triggered.connect(self.save_params_dialog)
+        act = menu.addAction("Загрузить параметры…")
+        act.setShortcut("Ctrl+O")
+        act.triggered.connect(self.load_params_dialog)
         view = self.menuBar().addMenu("Вид")
         act = self.dock_prof.toggleViewAction()
         act.setText("Редактор профиля зеркала")
@@ -438,7 +447,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def view_heat(self):
         t = self.t_heat
-        ax = t.axes[0, 0]
         t.fig.clf()
         ax = t.fig.subplots(1, 1)
         t.axes = np.array([[ax]])
@@ -535,7 +543,7 @@ class MainWindow(QtWidgets.QMainWindow):
         lim = p.robot.size
         info = self.sim.mirror_info
         top = p.mirror_plane_height + float(info["bounds"][1][2])
-        rad = max(abs(info["bounds"][0][0]), info["bounds"][1][0]) if info else 0
+        rad = max(abs(info["bounds"][0][0]), info["bounds"][1][0])
         rows = []
         ok = "<span style='color:#2a2'>OK</span>"
         bad = "<span style='color:#c33'><b>ПРЕВЫШЕНИЕ</b></span>"
@@ -560,6 +568,93 @@ class MainWindow(QtWidgets.QMainWindow):
         if path and "img" in self._last:
             from PIL import Image
             Image.fromarray(self._last["img"]).save(path)
+
+    # --------------------------------------------------------- parameter files
+    # widget attribute names; the three heights are stored as camera height + lens-to-mirror
+    _SPINS = ("body_h", "rx", "ry", "rh", "h_cam", "d_lm", "hfov", "bx", "by", "det_px", "refl",
+              "m_r", "m_depth", "scale", "ref_z")
+    _COMBOS = ("league", "res", "preset")
+    _CHECKS = ("chk_flip", "chk_ref")
+    _EDITOR_SPINS = ("d_near", "d_far", "th_in", "th_max", "gamma", "n_pts")
+
+    def params_dict(self):
+        d = {"version": 1}
+        d.update({k: getattr(self, k).value() for k in self._SPINS})
+        d.update({k: getattr(self, k).currentText() for k in self._COMBOS})
+        d.update({k: getattr(self, k).isChecked() for k in self._CHECKS})
+        d["step_path"] = self.p.mirror.step_path
+        ed = self.editor
+        d["profile_points"] = [list(q) for q in ed.points()]
+        d["profile_smooth"] = ed.smooth
+        d["profile_calc"] = {k: getattr(ed, k).value() for k in self._EDITOR_SPINS}
+        return d
+
+    def apply_params(self, d):
+        ed = self.editor
+        widgets = ([getattr(self, k) for k in self._SPINS + self._COMBOS + self._CHECKS]
+                   + [getattr(ed, k) for k in self._EDITOR_SPINS] + [ed.chk_smooth])
+        for w in widgets:
+            w.blockSignals(True)
+        try:
+            for k in self._SPINS:
+                if k in d:
+                    getattr(self, k).setValue(float(d[k]))
+            for k in self._COMBOS:
+                if k in d:
+                    getattr(self, k).setCurrentText(str(d[k]))
+            for k in self._CHECKS:
+                if k in d:
+                    getattr(self, k).setChecked(bool(d[k]))
+            for k, v in d.get("profile_calc", {}).items():
+                if k in self._EDITOR_SPINS:
+                    getattr(ed, k).setValue(v if k != "n_pts" else int(v))
+            ed.chk_smooth.setChecked(bool(d.get("profile_smooth", ed.smooth)))
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
+        ed.smooth = ed.chk_smooth.isChecked()
+
+        is_pts = self.preset.currentText() == POINTS
+        self.m_r.setEnabled(not is_pts)
+        self.m_depth.setEnabled(not is_pts)
+        if is_pts and d.get("profile_points"):
+            ed.pts = [(float(r), float(z)) for r, z in d["profile_points"]]
+            ed._fill_table()
+            ed.redraw()
+        elif not is_pts:
+            self._push_preset_to_editor()
+
+        step = d.get("step_path", "")
+        if step and not Path(step).is_file():
+            QtWidgets.QMessageBox.warning(self, "Загрузка параметров",
+                                          f"Файл зеркала не найден:\n{step}\nИспользован профиль из списка.")
+            step = ""
+        self.p.mirror.step_path = step
+        self.reload_mirror()
+        self._sync_heights("d")
+
+    def save_params(self, path):
+        Path(path).write_text(json.dumps(self.params_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def load_params(self, path):
+        self.apply_params(json.loads(Path(path).read_text(encoding="utf-8")))
+
+    def save_params_dialog(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Сохранить параметры", "params.json", "JSON (*.json)")
+        if path:
+            self.save_params(path)
+            self.status.showMessage(f"Параметры сохранены: {path}")
+
+    def load_params_dialog(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Загрузить параметры", "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            self.load_params(path)
+        except (OSError, ValueError, TypeError) as e:
+            QtWidgets.QMessageBox.warning(self, "Загрузка параметров", f"Не удалось прочитать файл:\n{e}")
+            return
+        self.status.showMessage(f"Параметры загружены: {path}")
 
 
 def _rz(deg):
